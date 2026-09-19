@@ -1,0 +1,94 @@
+workflows:
+  ios-native-workflow:
+    name: Burpengary Market Loyalty App
+
+    max_build_duration: 60
+
+    instance_type: mac_mini_m2
+
+    integrations:
+      app_store_connect: BurpengaryAppStore
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.burpengaryfruitmarket.loyalty
+
+      vars:
+        XCODE_PROJECT: "BurpengaryLoyalty.xcodeproj"
+        XCODE_SCHEME: "BurpengaryLoyalty"
+        APP_STORE_APPLE_ID: "6810118060"
+
+      xcode: latest
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          brew install xcodegen
+
+      - name: Generate Xcode project from project.yml
+        script: |
+          xcodegen generate
+
+      # NOTE: requires `VERSIONING_SYSTEM: "apple-generic"` under
+      # settings.base in project.yml, or agvtool will fail here.
+      - name: Set build number from App Store Connect
+        script: |
+          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID")
+          agvtool new-version -all $(($LATEST_BUILD_NUMBER + 1))
+
+      - name: Verify generated Xcode project
+        script: |
+          echo "===== PROJECT ====="
+          ls -la "$XCODE_PROJECT"
+
+          echo "===== SCHEMES ====="
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -list
+
+          echo "===== ASSETS ====="
+          find Resources -name "Assets.xcassets" -print
+
+          echo "===== APPICON REFERENCE ====="
+          grep -n "AppIcon" "$XCODE_PROJECT/project.pbxproj" || true
+
+          echo "===== FIREBASE REFERENCES ====="
+          grep -n "FirebaseAuth" "$XCODE_PROJECT/project.pbxproj" || true
+          grep -n "FirebaseFirestore" "$XCODE_PROJECT/project.pbxproj" || true
+          grep -n "FirebaseMessaging" "$XCODE_PROJECT/project.pbxproj" || true
+
+          echo "===== GOOGLE SIGN-IN ====="
+          grep -n "GoogleSignIn" "$XCODE_PROJECT/project.pbxproj" || true
+
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+
+      - name: Resolve Swift Package dependencies
+        script: |
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project "$XCODE_PROJECT"
+
+      - name: Build ipa for distribution
+        script: |
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
